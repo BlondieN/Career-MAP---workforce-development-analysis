@@ -1,0 +1,1093 @@
+---
+title: "Career Advancement"
+author: "Blondie"
+format: pdf
+---
+
+```{r}
+#Load All libraries
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(lubridate)
+library(tidyr)
+library(car)
+library(janitor)
+library(caret)
+library(glmnet)
+library(dplyr)
+library(tigris)
+library(ggplot2)
+library(sf)
+library(forcats)
+library(kableExtra)
+```
+
+## Load all datasets and clean column names to snake_case with janitor
+```{r}
+# Loading and Processing 
+intake <- read_excel("Intake Survey _AU2.xlsx") |> clean_names()
+training_edu <- read_excel("Training&Education_AU.xlsx") |> clean_names()
+employment <- read_excel("Employment Data_AU2.xlsx") |> clean_names()
+july_data <- read_excel("July 25 Monthly Data_AU.xlsx") |> clean_names()
+```
+
+# INTAKE DATASET
+```{r}
+# Drop columns with > 60% missing in Intake data
+threshold <- 0.6 * nrow(intake)
+intake <- intake |> 
+  select(where(~ sum(is.na(.)) < threshold))
+
+# Select and change some variables into factors 
+intake <- intake |> 
+  select(response_id, education_goals, training_completed, desired_career_interests) |>
+  mutate(across(where(is.character), as.factor)) |>
+  mutate(across(where(is.factor), ~ fct_explicit_na(., na_level = "Unknown")))
+```
+
+## Program Intake Education Goals
+```{r}
+# Define keywords for each education level
+education_patterns <- list(
+  "High School/GED" = c("high school", "ged"),
+  "Associate Degree" = c("associate"),
+  "Bachelor Degree" = c("bachelor"),
+  "Masters or Higher" = c("master", "phd", "doctorate"),
+  "Vocational Certifications" = c("vocational"),
+  "Occupational License" = c("occupational license"),
+  "None (Already Have What I Need)" = c("none \\(i already have", "i'm not sure\\r\\nnone"),
+  "Unknown" = c("unknown", "other", "i'm not sure", "im not sure")
+)
+
+# Collapse patterns into regex for easier matching
+education_patterns <- lapply(education_patterns, function(x) paste(x, collapse = "|"))
+
+# Apply categorization
+intake <- intake |> 
+  mutate(
+    education_goals_clean = tolower(education_goals),
+    education_goals = purrr::map_chr(education_goals_clean, ~ {
+      matched <- names(education_patterns)[sapply(education_patterns, function(pat) str_detect(.x, pat))]
+      if (length(matched) == 0) "Other" else matched[1]
+    })
+  ) |> 
+  select(-education_goals_clean)
+```
+
+```{r,}
+#Distribution of education Goal Category
+intake |> 
+  count(education_goals, sort = TRUE) |> 
+  ggplot(aes(x = fct_reorder(education_goals, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  scale_y_continuous(position='right') +
+  coord_flip() +
+  labs(title = "Distribution of Education Goals at Intake",
+       x = "",
+       y = "")
+```
+
+# Program Intake Training Completed 
+```{r}
+#Training Completed
+training_patterns <- list(
+  "None" = c("none", "no training", "n/a", "na", "have not completed any yet", "no"),
+  
+  #Education levels 
+  "High School Diploma / GED" = c("high school", "ged", "diploma"),
+  "Associate Degree" = c("associate"),
+  "Bachelor's Degree" = c("bachelor", "ba", "bs"),
+  "Masters or Higher" = c("master", "m\\.a", "msc", "phd", "doctorate", "mba"),
+  
+  # Healthcare & Social Services
+  "Healthcare" = c("medical", "dental", "cpr", "aid", "nurse","cna","health","clinical",
+                   "phlebotomy","emt","patient care","bls","hipaa","serv safe","crp",
+                   "safe certification blood pathogen", "pharmacy technician", 
+                   "pharmacy", "nursing", "care giver"),
+  #Legal 
+  "Legal" = c("attorney","paralegal","judge","legal","court","compliance","notary","mediation"),
+  
+   # Business, Entrepreneurship & Office
+  "Business & Entrepreneurship" = c("entrepreneur","business","management","project","retail","finance"),
+  
+   # IT & Digital
+  "Information Technology" = c("it","computer","cyber","network","compTIA",
+                               "software","programming","digital","comptia a","help desk",
+                               "mos certification specialist in powerpoint, excel and word"),
+  
+    # Hospitality & Food Service
+  "Hospitality & Food Service" =c("hospitality","food","chef","cook",
+                                  "restaurant","bartend","catering","hotel","serve safe"),
+  
+  # Childcare & Education
+  "Childcare & Education" = c("child","childcare","teacher","ece","daycare",
+                              "early childhood","paraprofessional"),
+  
+    # Customer Service
+  "Customer Service & Admin" = c("customer service","clerk","admin","office",
+                                 "front desk","receptionist","sales","cashier",
+                                 "conceirge","concierge"),
+  
+   # Trades, Construction & Logistics
+  "Construction & Technical Trades" = c("construction","carpentry","electric","maintenance",
+                                        "plumbing","truck","forklift"),
+   # Cosmetology & Personal Care
+  "Cosmetology & Personal Care" = c("cosmetology","esthetic","hair","barber","beauty","spa",
+                                    "makeup","nail","waxing","facial","eyebrow"),
+  
+  #Social work and 
+  "Social Work & Human Services" = c("social work","counseling","mental health","case management","community support","trauma","advocacy","homeless", "youth"   ),
+  
+   # Security & Law Enforcement
+  "Security & Law Enforcement" = c("security","police","armed","unarmed","law enforcement","military","firearm","spo"),
+  
+  #transport and logistics 
+  "Transportation & Logistics" = c("cdl","truck","driver","delivery","transport",
+                                   "warehouse","logistics","route","pallet jack"),
+  
+  "Office & Professional Development" = c("training","certificate","certified","leadership",
+                                          "management","program","development","dc career",
+                                          "job corps","fema", "apprentice", "dhl"),
+  # Creative & Specialized Fields
+  "Creative & Specialized Fields" = c("music","yoga","art","design","creative","photography","writing","media"),
+  
+  #In Education or Training
+  "In Education or Training" = c("student","enrolled","college","university","learning","course","class","in the process","currently studying"),
+  
+  #General Certified Skills / Licensing
+  "General Certified Skills" = c("certificate","certified","license","licensure","accreditation","credential")
+)
+
+# Convert keywords to regex for str_detect
+training_patterns <- lapply(training_patterns, function(x) paste(x, collapse = "|"))
+
+# Categorize training_completed
+intake <- intake |> 
+  mutate(
+    training_category = map_chr(training_completed, function(tc) {
+      tc_lower <- tolower(tc)
+      matched <- names(training_patterns)[sapply(training_patterns, function(pat) str_detect(tc_lower, pat))]
+      if(length(matched) == 0) "Uncategorized" else matched[1]
+    })
+  )
+
+# Remove duplicates
+intake_unique <- intake |> 
+  distinct(training_completed, training_category)
+```
+
+```{r}
+#Visualization of the Training Completed variable
+intake |> 
+  count(training_category, sort = TRUE) |> 
+  ggplot(aes(x = fct_reorder(training_category, n), y = n)) +
+  geom_col(fill = "darkgreen") +
+  scale_y_continuous(position='right') +
+  coord_flip() +
+  labs(title = "Distribution of Training Completed by Category",
+       x = "",
+       y = "") +
+  theme(panel.grid.major.y = element_blank())
+```
+
+```{r}
+# Get all entries that were not uncategorized. 
+uncategorized_levels <- intake |> 
+  filter(training_category == "Uncategorized") |> 
+  pull(training_completed) |>  
+  unique()                       
+
+# View them
+uncategorized_levels
+```
+
+## Desired Career Goals. 
+```{r}
+#Desired Career Goals at Intake
+# Categorize career interests into standardized clusters using keyword
+intake <- intake |> 
+  mutate(
+    desired_careers = case_when(
+      str_detect(str_to_lower(desired_career_interests), 
+                 "unknown|not sure|i'm not sure|im not sure") ~ "Unknown",
+      str_detect(str_to_lower(desired_career_interests), 
+                 "business|administrative|management|admin") ~
+        "Administrative",
+      str_detect(str_to_lower(desired_career_interests), 
+                 "construction|trades|carpentry|electric|plumbing|welding|
+                 cdl|forklift") ~ "Specialized Trades",
+      str_detect(str_to_lower(desired_career_interests), "education|teacher|
+                 teaching|early childhood|school") ~ "Education",
+      str_detect(str_to_lower(desired_career_interests), "entrepreneur|
+                 start your own|small business|
+                 self employment") ~ "Start Own Business",
+      str_detect(str_to_lower(desired_career_interests), 
+                 "government|public sector|civil service") ~ "Government",
+      str_detect(str_to_lower(desired_career_interests), "healthcare|nurse|
+                 medical|doctor|pharmacy|health") ~ "Healthcare",
+      str_detect(str_to_lower(desired_career_interests), "hospitality|hotel|
+                 restaurant|food service|bartender|waiter|serve safe food handlers") ~ "Hospitality",
+      str_detect(str_to_lower(desired_career_interests), "human services|
+                 social work|counseling|community") ~ 
+        "Human Services/ Social Work",
+      str_detect(str_to_lower(desired_career_interests), 
+                 "information technology|it|computer|cybersecurity|software|microsoft|
+                 tech") ~ "Information Technology",
+      str_detect(str_to_lower(desired_career_interests), "infrastructure|
+                 utility|solar|energy") ~ "Infrastructure and energy",
+      str_detect(str_to_lower(desired_career_interests), "science|technology|
+                 engineering|math|stem") ~ "Science and Technology",
+      str_detect(str_to_lower(desired_career_interests), "security|
+                 law enforcement|police|military|firefighter") ~ 
+        "Security and Law enforcement",
+      str_detect(str_to_lower(desired_career_interests), "transportation|
+                 logistics|driver|truck|delivery") ~ 
+        "Transportation and Logistics",
+      TRUE ~ "Other"
+    )
+  )
+```
+
+```{r}
+# Count the number of responses per desired career interest 
+desired_careers <- intake |> 
+  count(desired_careers, sort = TRUE)
+
+# Plot the horizontal bar chart
+ggplot(desired_careers, aes(x = reorder(desired_careers, n), y = n, fill = desired_careers)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(position='right') +
+  coord_flip() +
+  labs(
+    title = "Distribution of Desired Careers by Category",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r}
+# View all items categorized as "Other"
+other_items <- intake |> 
+  filter(desired_careers == "Other") |> 
+  select(desired_career_interests) |> 
+  distinct()
+other_items
+```
+
+# TRAINING$EDUCATION DATASET
+
+## Visualize training outcomes and career clusters
+```{r}
+#Training Outcomes and Career Clusters
+# Remove missing values for training_status
+training_edu_clean <- training_edu |> 
+  filter(!is.na(training_status))
+
+# Count training_status and calculate percentages
+training_status_summary <- training_edu_clean |> 
+  count(training_status, sort = TRUE) |> 
+  mutate(
+    percent = round(n / sum(n) * 100, 0),
+    label = paste0(percent, "%")
+  )
+
+# Remove missing values for career_cluster
+training_edu_clean <- training_edu |> 
+  filter(!is.na(career_cluster))
+
+# Count career_cluster and calculate percentages
+career_cluster_summary <- training_edu_clean |> 
+  count(career_cluster, sort = TRUE) |> 
+  mutate(
+    percent = round(n / sum(n) * 100, 0),
+    label = paste0(percent, "%")
+  )
+
+# Pie chart
+ggplot(training_status_summary, aes(x = "", y = n, fill = training_status)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5)) +
+  labs(title = "Training Completion Status") +
+  theme_void() +
+  theme(legend.title = element_blank())
+
+```
+
+## Career_cluster
+
+```{r}
+# Remove missing values for career_cluster
+training_edu_clean <- training_edu |> 
+  filter(!is.na(career_cluster))
+
+# Count career_cluster and calculate percentages
+career_cluster_summary <- training_edu_clean |> 
+  count(career_cluster, sort = TRUE) |> 
+  mutate(
+    percent = round(n / sum(n) * 100, 0),
+    label = paste0(percent, "%")
+  )
+
+# Pie chart
+ggplot(career_cluster_summary, aes(x = "", y = n, fill = career_cluster)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 4) +
+  labs(title = "Training Completion Career Cluster") +
+  theme_void() +
+  theme(legend.title = element_blank())
+```
+
+
+# EMPLOYMENT DATASET
+## Top Occupations and Hourly Wages
+
+```{r}
+#Select variables of interest
+employment <- employment |> 
+  select(response_id, position_job_title, job_zone, job_classification,  
+         new_wage_amount_hourly, hours_per_week, career_cluster_1, 
+         employment_status_all_positions)
+employment
+```
+
+```{r}
+# Standardize similar position_job_titles (overwrites employment clomun)
+employment <- employment |>
+  mutate(
+    position_job_title = case_when(
+      # Security 
+      str_detect(tolower(position_job_title), "security") ~ "Security",
+      
+      # Customer Service 
+      str_detect(str_to_lower(position_job_title), "customer service|customer support|call center|call centre|call center rep|call centre rep") ~
+        "Customer Service",
+      
+      # Food prep 
+      str_detect(tolower(position_job_title), "food prep|cava") ~ "Food Prep",
+      
+      # Housekeeping 
+      str_detect(tolower(position_job_title), "housekeeping") ~ "Housekeeping",
+      
+      # Keep everything else as-is
+      TRUE ~ position_job_title
+    )
+  )
+
+
+employment |>
+  count(position_job_title, sort = TRUE)
+
+```
+
+
+# Top 20 highest paying jobs
+```{r}
+# Remove rows with missing wages
+employment <- employment |>
+  filter(!is.na(new_wage_amount_hourly))
+
+# Summarize wages by position_job_title
+wage_summary <- employment |>
+  group_by(position_job_title) |>
+  summarise(
+    count = n(),
+    mean_wage = mean(new_wage_amount_hourly),
+    median_wage = median(new_wage_amount_hourly),
+    min_wage = min(new_wage_amount_hourly),
+    max_wage = max(new_wage_amount_hourly)
+  ) |>
+  arrange(desc(mean_wage)) |>
+  slice_head(n = 20) # select only top 20
+
+
+# Plot top 20 positions by mean wage
+ggplot(wage_summary, aes(x = reorder(position_job_title, mean_wage), y = mean_wage)) +
+  geom_col(fill = "maroon") +
+  scale_y_continuous(position='right', labels = dollar) +
+  coord_flip() +
+  labs(
+    title = "Top 20 Current Titles by Hourly Wages",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+## Employment Type
+```{r}
+#Full-Time vs Part-Time
+employment |> 
+  count(job_classification) |> 
+  ggplot(aes(x = job_classification, y = n, fill = job_classification)) +
+  geom_col(show.legend = FALSE) +
+  labs(title = "Job Classification",
+       x = "Type",
+       y = "") +
+  theme_minimal()
+```
+
+
+# JULY DATASET
+## Top Desired Occupations
+
+**Overall Career Goals in July**
+
+```{r}
+# Drop columns with > 60% missing in monthly data
+threshold <- 0.6 * nrow(july_data)
+july_data <- july_data |> 
+  select(where(~ sum(is.na(.)) < threshold))
+
+# Select and clean monthly data
+july_data <- july_data |> 
+  select(response_id, educational_goal,educational_goal_status, percentage_progress_towards_career_goal,overall_career_goal, career_goal_pathway,career_goal_occupation_title, career_focus_classification) |>
+  mutate(across(where(is.character), as.factor)) |>
+  mutate(across(where(is.factor), ~ fct_explicit_na(., na_level = "Unknown")))
+july_data
+```
+
+```{r}
+#Overall Career Goals in July
+career_goal_long <- july_data |>
+  filter(!is.na(overall_career_goal)) |>
+  mutate(
+    # split line break between goals
+    goal_raw = str_split(overall_career_goal, "\\r\\n")
+  ) |>
+  unnest(goal_raw) |>
+  mutate(goal_raw = str_trim(goal_raw))
+
+# clean label
+career_goal_long <- career_goal_long |>
+  mutate(
+    goal_simple = case_when(
+      goal_raw %in% c("1.Obtain employment")                           ~ "Obtain employment",
+      goal_raw %in% c("2.Shift into a new career path")                ~ "Shift into new career",
+      goal_raw %in% c("3.Advance to a leadership position")            ~ "Advance to leadership",
+      goal_raw %in% c("4.Start own business")                          ~ "Start own business",
+      goal_raw %in% c("5.Earn a promotion")                            ~ "Earn a promotion",
+      goal_raw %in% c("6.Other Goal", "6. Other Goal")                 ~ "Other goal",
+      goal_raw %in% c("7.Other Financial")                             ~ "Other financial",
+      goal_raw %in% c("Unknown")                                       ~ "Unknown",
+      TRUE                                                             ~ "Other/uncoded"
+    )
+  )
+
+# Summarize counts and percentages
+career_goal_summary <- career_goal_long |>
+  count(goal_simple, sort = TRUE) |>
+  mutate(
+    percent = round(n / sum(n) * 100, 1),
+    label   = paste0(percent, "%")
+  )
+
+# Bar chart of overall career goals
+ggplot(career_goal_summary,
+       aes(x = reorder(goal_simple, percent),
+           y = percent)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = label), hjust = 0.2, size = 4) +
+  scale_y_continuous(position='right') +
+  coord_flip() +
+  labs(
+    title = "Overall Career Goals (Month of July)",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+
+# Education Goals in the month of July
+```{r}
+#Overall Education Goals in July
+# Define keywords for educational goal
+july_goal <- july_data |>
+  mutate(
+    educational_goal = case_when(
+      str_detect(educational_goal %||% "", "1.Obtain GED/high school diploma") ~ "GED/high school diploma",
+      str_detect(educational_goal %||% "", "2.Obtain career license/certification") ~ "License/Certification",
+      str_detect(educational_goal %||% "", "3.Obtain bachelor's degree") ~ "Bachelor's degree",
+      str_detect(educational_goal %||% "", "4.Obtain associate degree") ~ "Associate degree",
+      str_detect(educational_goal %||% "", "5.Obtain graduate degree") ~ "Graduate degree",
+      str_detect(educational_goal %||% "", "6.Gain general career skills") ~ "Gain general career skills",
+      str_detect(educational_goal %||% "", "7.Other goal") ~ "Other goal",
+      str_detect(educational_goal %||% "", "8.No educational goal") ~ "No educational goal",
+      TRUE ~ "Other goal"
+    )
+  )
+
+# Count and plot
+july_goal <- july_goal|>
+  count(educational_goal, sort = TRUE)
+```
+
+```{r}
+ggplot(july_goal, aes(x = reorder(educational_goal, n), y = n)) +
+  geom_col(fill = "royalblue") +
+  coord_flip() +
+  scale_y_continuous(position = "right") +
+  labs(
+    title = "Distribution of Educational Goals (month of July)",
+    x = "Education Goal",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+# Education Goal Completion Status 
+```{r}
+#Education Goal Completion Status 
+# Clean and summarize educational goal status for plotting
+goal_status_summary <- july_data |>
+  filter(!is.na(educational_goal_status)) |>
+  mutate(
+    educational_goal_status = case_when(
+      educational_goal_status %in% c("In progress", "In Progress") ~ "In Progress",
+      TRUE ~ educational_goal_status
+    )
+  ) |>
+  count(educational_goal_status, sort = TRUE) |>
+  mutate(
+    percent = round(n / sum(n) * 100, 1),
+    label = paste0(percent, "%")
+  )
+```
+
+```{r}
+# Bar charts of education goals status 
+ggplot(goal_status_summary,
+             aes(x = educational_goal_status, y = percent, fill = educational_goal_status)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = label), vjust = -0.3, size = 4) +
+  labs(
+    title = "Educational Goal Status",
+    x = "",
+    y = "Percentage of participants"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+# Career Focus Classification
+
+```{r}
+#Career Focus Classification
+july_data |> 
+  count(career_focus_classification)
+# Summarize career_focus_classification and create short group labels
+career_focus_summary <- july_data |>
+  filter(!is.na(career_focus_classification)) |>
+  count(career_focus_classification, sort = TRUE) |>
+  mutate(
+    percent = round(n / sum(n) * 100, 1),
+    label   = paste0(percent, "%"),
+    # axis labels
+    career_focus_group = case_when(
+      career_focus_classification == "Group 1 – Career is the Primary Focus"            ~ "Grp 1",
+      career_focus_classification == "Group 2 – Career and Stability Dual Focus"        ~ "Grp 2",
+      career_focus_classification == "Group 3 – Stability Focus"                        ~ "Grp 3",
+      career_focus_classification == "Group 4 – Permanent Housing Referral"             ~ "Grp 4",
+      career_focus_classification == "Unknown"                                          ~ "Unknown"
+    ),
+    career_focus_group = factor(
+      career_focus_group,
+      levels = c("Grp 1", "Grp 2", "Grp 3", "Grp 4", "Unknown")
+    )
+  )
+
+```
+
+```{r, echo=FALSE}
+ggplot(career_focus_summary,
+       aes(x = career_focus_group,
+           y = percent,
+           fill = career_focus_group)) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = label), vjust = -0.3, size = 4) +
+  scale_fill_discrete(
+    name = "Career focus group",
+    labels = c(
+      "Grp 1"   = "Group 1 – Career is the Primary Focus",
+      "Grp 2"   = "Group 2 – Career and Stability Dual Focus",
+      "Grp 3"   = "Group 3 – Stability Focus",
+      "Grp 4"   = "Group 4 – Permanent Housing Referral",
+      "Unknown" = "Unknown"
+    )
+  ) +
+  labs(
+    title = "Career Focus Classification",
+    x = "",
+    y = "Percentage of participants"
+  ) +
+  theme_minimal()
+```
+
+# Standardize career goal occupation title 
+
+```{r, include=FALSE}
+# Career Goal Occupation Title 
+patterns <- list(
+  "Social Work" = c("social", "case", "human services", "custodial", "community outreach"),
+  "Dental Hygienist" = c("dental hygienist", "pharmacy technician"),
+  "Nursing" = c("nurs", "surgical", "phlebot", "sonograph", "respiratory", 
+                "radiology", "midwife", "therapist", "mental health", "scientist", "labor/delivery physician", "veternarian"),
+  "Healthcare Support" = c("assistant", "aide", "medical", "coder", "billing", "veterinary", "health information management"),
+  "Education" = c("teacher", "educat", "paraprofessional", "school"),
+  "Childcare" = c("child", "cda"),
+  "Entrepreneurship" = c("entrepreneur", "owner", "salon", "cater", "business", "entrepeneur", "enterpreneur"),
+  "Financial Services" = c("finance", "fundraising", "account", "insurance", "payroll", "financial advisor", "financial hr professional"),
+  "Peer Support" = c("peer", "mental health"),
+  "Maintenance" = c("plumb", "maintenance", "custodial", "technician", "environmental", 
+                    "housekeep", "dishwasher", "maintenace worker", "waste management"),
+  "Legal" = c("attorney", "paralegal", "judge"),
+  "Real Estate" = c("real estate", "realtor", "leasing", "architectural"),
+  "IT Professionals" = c("it", "cyber", "technician", "microsoft", "google", "comptia", "cisco"),
+  "Customer Service" = c("call center", "customer service", "dispatcher", "receptionist", "tsa"),
+  "Law Enforcement" = c("mpd", "police", "law enforce", "marshal", "security officer", "crime", "sergeant", "superintendent"),
+  "Security Guards" = c("security guard", "armed security", "unarmed security", "protective officer"),
+  "Administrative" = c("admin", "clerical", "office", "human resource"),
+  "Chef/ Food Related" = c("chef", "cook", "server", "restaurant", "food", "baker"),
+  "Program Management" = c("program specialist", "program manager", "director", "contractor"),
+  "Drivers" = c("cdl", "driver", "bus operator", "truck", "motor vehicle operator"),
+  "Cosmetology" = c("cosmetolog", "esthetician", "barber", "massage", "groomer"),
+  "Retail Management" = c("manager", "director", "supervisor", "sales associate", "management"),
+  "Federal/ Govt Work" = c("usps", "federal", "fema", "gov"),
+  "Hospitality" = c("hotel", "hospitality", "funeral"),
+  "Special Fields" = c("engineer", "firefighter", "vendor machine operator"),
+  "Undecided" = c("undecided", "^na$", "aspiring", "instructor")
+)
+
+# Collapse patterns into regex strings
+patterns <- map(patterns, ~ paste(.x, collapse = "|"))
+
+# Apply classification
+july_data <- july_data |> 
+  mutate(
+    title_lower = tolower(career_goal_occupation_title),
+    title_lower = if_else(is.na(title_lower), "", title_lower),   # replace NA with empty string
+
+    career_goal_occupation_title_hold = map_chr(
+      title_lower,
+      ~ {
+        found <- NA_character_
+        for (cat in names(patterns)) {
+          if (isTRUE(str_detect(.x, patterns[[cat]]))) {
+            found <- cat
+            break
+          }
+        }
+        ifelse(is.na(found), "Other", found)
+      }
+    )
+  ) |> 
+  select(-title_lower)
+```
+
+
+# Desired Career Clusters
+
+```{r,echo=FALSE}
+#Desired Career Clusters
+# Count number of clients in each career goal category
+career_counts <- july_data |> 
+  count(career_goal_occupation_title_hold, sort = TRUE)
+
+# Keep only top 10 categories
+top_careers_clusters <- career_counts |> 
+  slice_max(n, n = 10)
+
+# Horizontal bar chart
+ggplot(top_careers_clusters, aes(x = reorder(career_goal_occupation_title_hold, n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  scale_y_continuous(position='right') +
+  coord_flip() +  # Horizontal bars
+  labs(
+    title = "Top Career Goals (July 2025)",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal()
+```
+
+
+# Current Job Title, Hourly Wage and Market Wage and wage gap
+```{r, include=FALSE}
+#Where they are currently working, how much they are being paid and how much the market rate is for the same job. 
+wage_comparison <- tribble(
+  ~current_title, ~job_zone, ~hourly_rate, ~market_hourly_rate, ~market_annual_rate, ~wage_gap, ~projected_growth,
+  "Owner", 5, 62.50, 115, 239200, 52.2, "Average – 3% - 4%",
+  "Case Manager", 4, 46, 32.42, 67440, -13.58, "Faster than average – 5% - 6%",
+  "Security", 2, 33.56, 30.35, 63130, -3.21, "Little or no change",
+  "Customer Service", 2, 46, 23.66, 49210, -22.34, "Decline -1% or lower",
+  "Housekeeping", 1, 21, 18.74, 38900, -2.26, "Little or no change",
+  "Book Seller", 2, 20, 18.17, 37800, -1.83, "Little or No change",
+  "Cook", 2, 24, 21.75, 45230, -2.25, "Much faster than average 7% or higher",
+  "Site Supervisor", 3, 20, 51.47, 107060, 31.47, "Average – 3% - 4%",
+  "Cook", 2, 24, 21.75, 45230, -2.25, "Much faster than average 7% or higher",
+  "Home Health Aide", 2, 19, 18.95, 39420, -0.05, "Much faster than average 7% or higher",
+  "Mail Carrier", 2, 19, 28.07, 58390, -9.07, "Decline -1% or lower"
+)
+```
+
+```{r, echo=FALSE}
+# Wage_comparison and gap are numeric
+wage_comparison <- wage_comparison |>
+  mutate(
+    hourly_rate = as.numeric(hourly_rate),
+    market_hourly_rate = as.numeric(market_hourly_rate),
+    wage_gap = as.numeric(wage_gap)
+  )
+
+# Order by market rate
+wage_comparison <- wage_comparison |>
+  arrange(market_hourly_rate)
+
+# Long format for current vs market
+wage_long <- wage_comparison |>
+  select(current_title, hourly_rate, market_hourly_rate, wage_gap) |>
+  pivot_longer(
+    cols = c(hourly_rate, market_hourly_rate),
+    names_to = "indicator",
+    values_to = "value"
+  )
+
+# Clean labels
+wage_long <- wage_long |>
+  mutate(
+    indicator = dplyr::recode(
+      indicator,
+      "hourly_rate" = "Current hourly rate",
+      "market_hourly_rate" = "Market hourly rate"
+    )
+  )
+
+dodge_width <- 0.7
+
+# Plot 
+ggplot(wage_long,
+       aes(x = reorder(current_title, value),
+           y = value,
+           fill = indicator)) +
+  # paired bars
+  geom_col(position = position_dodge(width = dodge_width), width = 0.6) +
+  # wage-gap labels positioned at current rate
+  geom_text(
+    data = wage_comparison,
+    aes(
+      x = current_title,
+      y = hourly_rate,  
+      label = paste0(
+        ifelse(wage_gap >= 0, "+", ""),
+        round(wage_gap, 1)
+        )
+      ),
+  inherit.aes = FALSE,
+  position = position_dodge(width = 0.7), 
+  hjust = 1,             
+  vjust = -0.5,          
+  size = 3.5,
+   ) +
+
+  coord_flip() +
+  scale_y_continuous(labels = dollar_format(), position = "right") +
+  scale_fill_manual(values = c(
+    "Current hourly rate" = "darkgreen",
+    "Market hourly rate"  = "darkorange"
+  )) +
+  labs(
+    title = "Current vs Market Hourly Rate and Wage Gap",
+    subtitle = "Gap for top 10 current titles (Market - Current) hourly rate difference",
+    x = "",
+    y = "",
+    fill = ""
+  ) +
+  theme_minimal() 
+```
+
+# Join Employment Data and Monthly (July) data
+## Career goals among clients with the highest-paying jobs
+```{r, include=FALSE}
+# Select only the columns position title and hourly wage from employembt data
+employment_subset <- employment |> 
+  select(response_id, position_job_title, new_wage_amount_hourly) 
+
+# Join july_data with employment using inner join to keep only matching rows between two datasets
+july_employment <- july_data |> 
+  inner_join(employment_subset, by = "response_id") |>
+  arrange(desc(new_wage_amount_hourly))
+
+# Check the resulting dataset
+names(july_employment)
+july_employment
+```
+
+```{r, include=FALSE}
+# Standardize job titles and collapse similar roles into broader categories
+career_counts <- july_employment |>
+  select(response_id, career_goal_occupation_title,
+         career_goal_occupation_title_hold,
+         position_job_title,
+         new_wage_amount_hourly) |>
+  filter(
+    !is.na(career_goal_occupation_title_hold),
+    !is.na(position_job_title),
+    !is.na(new_wage_amount_hourly)
+  ) |>
+  mutate(
+    position_job_title = str_to_lower(position_job_title),
+    position_job_title = case_when(
+      str_detect(position_job_title, "customer|call|agent") ~ "Customer Service",
+      str_detect(position_job_title, "security|armed|protective") ~ "Security",
+      str_detect(position_job_title, "food|chef|cook|cava") ~ "Food Prep",
+      str_detect(position_job_title, "suite|front desk|night auditor") ~ "Hospitality",
+      str_detect(position_job_title, "admin|administrator") ~ "Administration",
+      str_detect(position_job_title, "cashier|deli|produce|stocker") ~ 
+        "Retail / Food Service",
+      TRUE ~ str_to_title(position_job_title)
+    )
+  )
+
+# Identify the top 10 highest-paying job categories
+top_positions <- career_counts |>
+  group_by(position_job_title) |>
+  summarise(avg_hourly_wage = mean(new_wage_amount_hourly, na.rm = TRUE),
+            .groups = "drop") |>
+  arrange(desc(avg_hourly_wage)) |>
+  head(10)  
+
+#Count number of clients per career goal within each job category
+top_careers_10 <- career_counts |>
+  filter(position_job_title %in% top_positions$position_job_title) |>
+  count(position_job_title, career_goal_occupation_title_hold)
+
+
+top_careers_10 <- top_careers_10 |>
+  mutate(position_job_title = factor(position_job_title,
+                                     levels = top_positions$position_job_title))
+
+```
+
+#Career Clusters
+```{r, echo=FALSE}
+# Plot career goals for top 10 job categories
+ggplot(top_careers_10,
+       aes(x = reorder(career_goal_occupation_title_hold, n),
+           y = n,
+           fill = position_job_title)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Career Goal Clusters for Top 10 Highest-Paying Jobs",
+    subtitle = "Distribution of career goals among clients with the highest-paying jobs",
+    x = "Career Goals",
+    y = "",
+    fill = "Current Job Title"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+
+# Career Goals they actually want to pivot to. 
+```{r, echo=FALSE}
+# Career Goals for Top 10 Highest Paying Current Job Titles
+
+career_data <- july_employment |>
+  select(response_id,
+         career_goal_occupation_title,
+         position_job_title,
+         new_wage_amount_hourly) |>
+  filter(
+    !is.na(career_goal_occupation_title),
+    !is.na(position_job_title),
+    !is.na(new_wage_amount_hourly)
+  ) |>
+  mutate(
+    
+    position_job_title = str_squish(str_to_title(position_job_title)),
+    career_goal_occupation_title = str_squish(str_to_title(career_goal_occupation_title)),
+    
+    # Combine similar career goals
+    career_goal_occupation_title = case_when(
+      str_detect(career_goal_occupation_title, regex("^Cdl$", ignore_case = TRUE)) ~ 
+        "CDL Bus Driver",
+      str_detect(career_goal_occupation_title, regex("Cdl Bus Driver", 
+                                                     ignore_case = TRUE)) ~ "CDL Bus Driver",
+      str_detect(career_goal_occupation_title, 
+                 regex("Restaurant Owner|Food Truck Owner|Daycare Owner", 
+                       ignore_case = TRUE)) ~ "Entrepreneur",
+      str_detect(career_goal_occupation_title, regex("Emt", ignore_case = TRUE)) ~ 
+        "Emergency Medical Technician",
+      str_detect(career_goal_occupation_title, regex("It Specialist", ignore_case = TRUE)) ~ 
+        "IT Specialist",
+      TRUE ~ career_goal_occupation_title  # Keep everything else as-is
+    )
+  )
+
+# Identify top 10 highest-paying current job titles
+top_positions <- career_data |>
+  group_by(position_job_title) |>
+  summarise(avg_hourly_wage = mean(new_wage_amount_hourly, na.rm = TRUE),
+            .groups = "drop") |>
+  arrange(desc(avg_hourly_wage)) |>
+  head(10)  
+
+# Filter data to include only top 10 current jobs
+top_careers <- career_data |>
+  filter(position_job_title %in% top_positions$position_job_title) |>
+  count(position_job_title, career_goal_occupation_title)
+
+# Make position_job_title a factor to preserve top 10 order
+top_careers <- top_careers |>
+  mutate(position_job_title = factor(position_job_title,
+                                     levels = top_positions$position_job_title))
+
+# Plot
+ggplot(top_careers,
+       aes(x = reorder(career_goal_occupation_title, n),
+           y = n,
+           fill = position_job_title)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Goals for Top 10 Highest Paying Current Job Titles",
+    subtitle = "Actual occupations clients want to move to",
+    x = "Desired Career Occupation",
+    y = "",
+    fill = "Current Job Title"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+
+# Career Growth opportunities, 2 per job title
+```{r}
+
+career_growth <- tibble(
+  current_role = c(
+    "Owner", "Owner",
+    "Case Manager", "Case Manager",
+    "Security Guard", "Security Guard",
+    "Customer Service Representative", "Customer Service Representative",
+    "Housekeeper", "Housekeeper",
+    "Book Seller", "Book Seller",
+    "Site Supervisor", "Site Supervisor",
+    "Food Prep", "Food Prep",
+    "Home Health Care Aide", "Home Health Care Aide",
+    "Mail Carrier", "Mail Carrier", "Mail Carrier"
+  ),
+  
+  current_wage = c(
+    62.50, 62.50,
+    46, 46,
+    33.56, 33.56,
+    23.57, 23.57,
+    21, 21,
+    20, 20,
+    20, 20,
+    24, 24,
+    10, 10,
+    19, 19, 19
+  ),
+  
+  transition_job = c(
+    "Compliance Managers", "Chief Executives",
+    "Clinical and Counseling Psychologists", "Medical and Health Services Managers",
+    "First-Line Supervisors of Security Workers", "Security Management Specialists",
+    "Sales Representatives (Non-Advertising/Insurance/Finance/Travel)", "Sales Managers",
+    "Lodging / Hospitality Managers", "First-Line Supervisors of Personal Service Workers",
+    "Library Assistant", "File Clerk",
+    "Solar Energy Installation Managers", "Construction Manager",
+    "Chefs and Head Cooks", "Food Service Director",
+    "Nursing Assistants", "Licensed Practical / Vocational Nurses",
+    "Cargo and Freight Agents", "Light Truck Drivers",
+    "Transportation, Storage, and Distribution Managers"
+  ),
+  
+  education_required = c(
+    "Bachelor’s Degree", "Master’s Degree",
+    "Master’s Degree + Postdoctoral Training", "Bachelor’s / Master’s Degree",
+    "High School + Training", "Bachelor’s / Vocational / On-the-job",
+    "High School Diploma", "Bachelor’s + Training",
+    "Bachelor’s / Training", "Vocational / Associate Degree",
+    "High School Diploma", "High School / Associate Degree",
+    "High School + On-the-job Training", "Bachelor’s Degree",
+    "Vocational / Apprenticeship / Associate Degree", "High School Diploma / Apprenticeship",
+    "Certification", "Certification",
+    "Bachelor’s / Apprenticeship", "High School Diploma",
+    "Bachelor’s Degree"
+  ),
+  
+  median_wage = c(
+    82.65, 115.00,
+    46.07, 77.46,
+    37.64, 51.35,
+    37.50, 74.19,
+    35.14, 27.16,
+    25.43, 27.67,
+    46.31, 61.91,
+    35.58, 38.58,
+    22.53, 33.86,
+    23.99, 22.89,
+    69.32
+  ),
+  
+  growth_outlook = c(
+    "Average", "Average",
+    "Much faster than average", "Much faster than average",
+    "Average", "Average",
+    "Average", "Faster than average",
+    "Average", "Much faster than average",
+    "Decline", "Decline",
+    "Faster than average", "Much faster than average",
+    "Much faster than average", "Faster than average",
+    "Slower than average", "Average",
+    "Much faster than average", "Much faster than average",
+    "Faster than average"
+  )
+)
+career_growth
+```
+
+```{r, warning=FALSE}
+# Table with kableExtra
+career_growth |> 
+  kable(format = "markdown", caption = "## Career Growth Opportunities", digits = 2) |> 
+  kable_styling(full_width = FALSE, position = "center") |> 
+  row_spec(0, bold = TRUE, background = "#D3D3D3") |> 
+  column_spec(6, bold = TRUE) |>  # Highlight Growth Outlook column
+  pack_rows("Owner", 1, 2) |> 
+  pack_rows("Case Manager", 3, 4) |> 
+  pack_rows("Security Guard", 5, 6) |> 
+  pack_rows("Customer Service Representative", 7, 8) |> 
+  pack_rows("Housekeeper", 9, 10) |> 
+  pack_rows("Book Seller", 11, 12) |> 
+  pack_rows("Site Supervisor", 13, 14) |> 
+  pack_rows("Food Prep", 15, 16) |> 
+  pack_rows("Home Health Care Aide", 17, 18) |> 
+  pack_rows("Mail Carrier", 19, 21) |> 
+  row_spec(which(career_growth$Growth_Outlook == "Much faster than average"), bold = TRUE, color = "green") |> 
+  row_spec(which(career_growth$Growth_Outlook == "Faster than average"), 
+           bold = TRUE, color = "darkgreen") |> 
+  row_spec(which(career_growth$Growth_Outlook == "Average"), color = "orange") |> 
+  row_spec(which(career_growth$Growth_Outlook == "Slower than average"), color = "red") |> 
+  row_spec(which(career_growth$Growth_Outlook == "Decline"), color = "red", italic = TRUE)
+```
+
+## END 
